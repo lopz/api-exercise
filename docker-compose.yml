@@ -1,0 +1,126 @@
+version: '3.5'
+services:
+ csapi-server:
+  image: lowlifebob/csapi:alpine-1.0.1
+  ports:
+   - "3333:3333"
+  volumes:
+   - /etc/localtime:/etc/localtime:ro
+   - /etc/timezone:/etc/timezone:ro
+  deploy:
+   resources:
+    limits:
+      cpus: '0.70'
+      memory: 512M
+    reservations:
+      cpus: '0.5'
+      memory: 256M
+#  env_file:
+#   - ./env_vars/env_db_mongo
+  environment:
+   - MONGODB_URI=mongodb://mongo-server:27017
+  secrets:
+   - MONGO_USER
+   - MONGO_PASSWORD
+  depends_on:
+   mongo-seeder:
+    condition: service_completed_successfully
+  healthcheck:
+   test: ["CMD", "curl", "-f", "http://localhost:3333/"]
+   interval: 10s
+   timeout: 5s
+   retries: 3
+   start_period: 30s
+  hostname: csapi-server-01
+  networks:
+   api_net_backend:
+    aliases:
+      - "csapi-server"
+   api_net_frontend:
+  stop_grace_period: 10s
+  labels:
+   com.csapi.description: "API restfull with MongoDB database support"
+
+ mongo-server:
+  image: mongo:5.0.6-focal
+  ports:
+   - "27017:27017"
+  volumes:
+   - mongodb:/data/db:rw
+  secrets:
+   - MONGO_USER
+   - MONGO_PASSWORD
+  stop_grace_period: 1m
+  networks:
+   api_net_backend:
+    aliases:
+     - "mongo-server"
+
+ mongo-seeder:
+  image: lowlifebob/csapi:seeder-alpine-1.0.1
+  command: "mongo-server"
+  depends_on:
+   - mongo-server
+#    condition: service_started
+  networks:
+   api_net_backend:
+    aliases:
+    - "mongo-seeder"
+
+ prometheus:
+  container_name: prometheus
+  image: prom/prometheus:v2.34.0
+  ports:
+   - "9090:9090"
+  volumes:
+   - ./config/prometheus/:/etc/prometheus/
+  restart: always
+  networks:
+   api_net_frontend:
+    aliases:
+     - "prometheus"
+
+ grafana:
+  container_name: grafana
+  image: grafana/grafana:8.2.6
+  depends_on:
+   - prometheus
+  ports:
+   - "3000:3000"
+  volumes:
+    - ./data/grafana/provisioning/dashboards/:/etc/grafana/provisioning/dashboards/
+    - ./data/grafana/provisioning/datasources/:/etc/grafana/provisioning/datasources/
+    - ./data/grafana/dashboards/:/var/lib/grafana/dashboards/
+  networks:
+   api_net_frontend:
+    aliases:
+     - "grafana"
+
+networks:
+  api_net_frontend:
+    driver: bridge
+    driver_opts:
+      com.docker.network.enable_ipv6: "false"
+    ipam:
+      driver: default
+      config:
+      - subnet: 172.16.100.0/24
+  api_net_backend:
+    driver: bridge
+    driver_opts:
+      com.docker.network.enable_ipv6: "false"
+#    internal: true
+    ipam:
+      driver: default
+      config:
+      - subnet: 172.16.101.0/24
+
+
+secrets:
+  MONGO_USER:
+    file: ./env_vars/MONGO_USER
+  MONGO_PASSWORD:
+    file: ./env_vars/MONGO_PASSWORD
+
+volumes:
+  mongodb:

@@ -1,0 +1,261 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongo-server
+  labels:
+    app: csapi
+  namespace: csapi
+spec:
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: csapi
+  template:
+    metadata:
+      labels:
+        name: mongo-server
+        app: csapi
+    spec:
+      volumes:
+       - name: csapi-mongo-data
+         persistentVolumeClaim:
+          claimName: data-pvc
+      containers:
+        - name: csapi-mongo
+          image: mongo:5.0.6-focal
+          args: ["--dbpath", "/data/db"]
+          imagePullPolicy: IfNotPresent
+          resources:
+           requests:
+            memory: "40Mi"
+            cpu: "0.5"
+           limits:
+            memory: "128Mi"
+            cpu: "1"
+          ports:
+          - containerPort: 27017
+            name: mongo
+          env:
+          - name: _MONGO_INITDB_ROOT_USERNAME
+            valueFrom:
+             secretKeyRef:
+              name: mongo-secret
+              key: db-user
+          - name: _MONGO_INITDB_ROOT_PASSWORD
+            valueFrom:
+             secretKeyRef:
+              name: mongo-secret
+              key: db-pass
+          volumeMounts:
+          - name: csapi-mongo-data
+            mountPath: "/data/db"
+
+          securityContext:
+           capabilities: {}
+           privileged: false
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: csapi-server
+  labels:
+    app: csapi-web
+  namespace: csapi
+spec:
+  replicas: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: csapi-web
+  template:
+    metadata:
+      labels:
+        app: csapi-web
+    spec:
+      containers:
+        - name: csapi-web
+          image: lowlifebob/csapi:alpine-1.0.1
+          imagePullPolicy: Always
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: 3333
+              httpHeaders:
+              - name: Custom-Header
+                value: livenessProbe
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+          - name: foo-storage
+            mountPath: /data/foo
+          resources:
+           requests:
+            memory: "5Mi"
+            cpu: "0.1"
+           limits:
+            memory: "10Mi"
+            cpu: "0.3"
+          ports:
+          - containerPort: 3333
+          env:
+          - name: MONGODB_URI
+            value: "mongodb://csapi-db.csapi.svc.cluster.local:27017"
+          securityContext:
+            capabilities: {}
+            privileged: false
+      volumes:
+      - name: foo-storage
+        emptyDir: {}
+
+---
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mongo-seeder
+  namespace: csapi
+spec:
+  containers:
+  - name: mongo-seeder
+    image: lowlifebob/csapi:seeder-alpine-1.0.1
+    args: ["csapi-db.csapi.svc.cluster.local"]
+    imagePullPolicy: Always
+    resources:
+      limits:
+        memory: "32Mi"
+        cpu: "0.5"
+  restartPolicy: Never
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  labels:
+    app: grafana
+  namespace: csapi
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      securityContext:
+        fsGroup: 472
+        runAsUser: 0
+        supplementalGroups:
+          - 0
+      containers:
+        - name: grafana
+          image: grafana/grafana:8.4.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: http-grafana
+              protocol: TCP
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /robots.txt
+              port: 3000
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            successThreshold: 1
+            timeoutSeconds: 2
+          livenessProbe:
+            failureThreshold: 3
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            tcpSocket:
+              port: 3000
+            timeoutSeconds: 1
+          resources:
+           requests:
+            memory: "10Mi"
+            cpu: "0.1"
+           limits:
+            memory: "50Mi"
+            cpu: "0.3"
+          volumeMounts:
+#            - mountPath: /var/lib/grafana
+#              subPath: grafana
+#              name: grafana-v
+#            - name: grafana-data
+#              mountPath: /var/lib/grafana
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards/monitoring-dashboard.json
+              subPath: monitoring-dashboard.json
+            - name: dashboards
+              mountPath: /etc/grafana/provisioning/datasources/ds-prometheus.yaml
+              subPath: ds-prometheus.yaml
+            - name: dashboards
+              mountPath: /etc/grafana/provisioning/dashboards/dashboards.yml
+              subPath: dashboards.yml
+      volumes:
+        - name: grafana-v
+          persistentVolumeClaim:
+            claimName: data-pvc
+        - name: dashboards
+          configMap:
+            name: grafana-cm
+        - name: grafana-data
+          emptyDir: {}
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  labels:
+    app: prometheus
+  namespace: csapi
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.34.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9090
+              name: http-prometeus
+              protocol: TCP
+          resources:
+           requests:
+            memory: "10Mi"
+            cpu: "0.1"
+           limits:
+            memory: "50Mi"
+            cpu: "0.3"
+          volumeMounts:
+          - name: prometheus-conf
+            mountPath: /etc/prometheus/prometheus.yml
+            subPath: prometheus.yml
+          - name: prometheus-v
+            mountPath: /etc/prometheus/data
+
+      volumes:
+        - name: prometheus-v
+          persistentVolumeClaim:
+            claimName: data-pvc        
+        - name: prometheus-conf
+          configMap:
+            name: prometheus-cm

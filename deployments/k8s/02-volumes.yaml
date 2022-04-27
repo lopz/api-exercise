@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: data-pv
+  namespace: csapi
+spec:
+  storageClassName: local-path
+  accessModes:
+    - ReadWriteMany
+  capacity:
+    storage: 200Mi
+  hostPath:
+    path: /data/monitor
+
+---
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data-pvc
+  namespace: csapi
+spec:
+  storageClassName: local-path
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 180Mi
